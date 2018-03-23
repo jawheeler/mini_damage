@@ -76,9 +76,6 @@
   <div id="myConsole"></div>
 <script type="text/javascript">
   $(document).ready(function(){
-    storage = window.localStorage;
-    storage.setItem("hello","world!");
-    $("#myConsole").text(JSON.stringify( storage.getItem("hello") ));
     mermaid.initialize({
       flowchart:{
         htmlLabels: false,
