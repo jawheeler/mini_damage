@@ -1,0 +1,466 @@
+<html>
+<head>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+  <script src="https://unpkg.com/mermaid@7.1.2/dist/mermaid.js"></script>
+  <style>
+    .triangle-border {
+      position:relative;
+      padding:15px;
+      margin:1em 0 3em;
+      border:3px solid #222222;
+      color:#333;
+      background:#fff;
+      /* css3 */
+      -webkit-border-radius:10px;
+      -moz-border-radius:10px;
+      border-radius:10px;
+    }
+    .triangle-border.left {
+      margin-left:30px;
+    }
+    .triangle-border:before {
+      content:"";
+      position:absolute;
+      bottom:-20px; /* value = - border-top-width - border-bottom-width */
+      left:40px; /* controls horizontal position */
+      border-width:10px 20px 0;
+      border-style:solid;
+      border-color:#5a8f00 transparent;
+      /* reduce the damage in FF3.0 */
+      display:block;
+      width:0;
+    }
+    .triangle-border:after {
+      content:"";
+      position:absolute;
+      bottom:-13px; /* value = - border-top-width - border-bottom-width */
+      left:47px; /* value = (:before left) + (:before border-left) - (:after border-left) */
+      border-width:13px 13px 0;
+      border-style:solid;
+      border-color:#fff transparent;
+      /* reduce the damage in FF3.0 */
+      display:block;
+      width:0;
+    }
+    .triangle-border.left:before {
+      top:13px; /* controls vertical position */
+      bottom:auto;
+      left:-26px; /* value = - border-left-width - border-right-width */
+      border-width:12px 26px 13px 0;
+      border-color:transparent #222222;
+    }
+
+    /* creates the smaller  triangle */
+    .triangle-border.left:after {
+      top:16px; /* value = (:before top) + (:before border-top) - (:after border-top) */
+      bottom:auto;
+      left:-21px; /* value = - border-left-width - border-right-width */
+      border-width:9px 21px 9px 0;
+      border-color:transparent #fff;
+    }
+  </style>
+</head>
+<body>
+  <select id="add-player-type">
+    <option value="Human">Human</option>
+  </select>
+  <p class="triangle-border left" style="width:125;position:absolute;top:100px;left:150px;" id="damage-tool">
+    <button id="damage-tool-heal" style="background-color:#ccffcc;width:70px;margin-bottom:10px;padding:6px 0px;">Heal</button>
+    <select id="damage-tool-amount" style="position:relative;top:19px"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+    <br/>
+    <button id="damage-tool-damage" style="background-color:#ffcccc;width:70px;padding:6px 0px;">Damage</button>
+  </p>
+  <button id="add-player-add">Add</button>
+  <div id="damages">
+  </div>
+  <div id="myConsole"></div>
+<script type="text/javascript">
+  $(document).ready(function(){
+    storage = window.localStorage;
+    storage.setItem("hello","world!");
+    $("#myConsole").text(JSON.stringify( storage.getItem("hello") ));
+    mermaid.initialize({
+      flowchart:{
+        htmlLabels: false,
+        theme: 'forest',
+        startOnLoad: true
+      }
+    });
+    $('#damage-tool').hide();
+    function randX(size) {
+      if (size == 1) return 0;
+      return Math.floor( Math.random() * size);
+    }
+    function damageModel(buildTemplate) {
+      var buildTemplate = buildTemplate;
+      var damageEvents = [];
+      var damageEventIndex = 0;
+      var that = {
+        canFullRestore: function() { return damageEvents.length > 0; },
+        fullRestore: function(force) {
+          if (typeof that.template != 'undefined') {
+            var damageEvent = Object.keys(that.template).filter(
+              function(key){ return that.template[key].maxCount > that.template[key].count }
+            ).map(
+              function(key){ return ["restore",[key, that.template[key].maxCount - that.template[key].count]] }
+            );
+            if (damageEvent.length > 0) {
+              that.addDamageEvent(damageEvent);
+            } else {
+              if (damageEvents.length > 0 && confirm("Clear History?")) {
+                damageEventIndex = 0;
+                damageEvents = [];
+              }
+            }
+          }
+          that.template = buildTemplate();
+        },
+        lost: function() {
+          return Object.keys(that.template).filter(function(key) {
+            return that.template[key].count == 0;
+          });
+        },
+        unlocked: function() {
+          var noProtection = function(damage) {
+            return (typeof damage.unlockedBy == 'undefined' ||
+                damage.unlockedBy.some(function(key) {
+                  var uDamage = that.template[key];
+                  return uDamage.count == 0 && noProtection(uDamage);
+                })
+            );
+          }
+          return Object.keys(that.template).filter(function(key) {
+            var damage = that.template[key];
+            return damage.count > 0 && noProtection(damage);
+          });
+        },
+        countUnlocked: function() {
+          return that.unlocked().reduce(function(countKeys, key) {
+            var damage = that.template[key];
+            for(var ii = 0; ii < damage.count; ii++) {
+              countKeys.push(key);
+            }
+            return countKeys;
+          }, []);
+        },
+        restorable: function() {
+          var unlocked = that.unlocked();
+          return Object.keys(that.template).filter( function(key) {
+            var dDamage = that.template[key];
+            return dDamage.count < dDamage.maxCount;
+          }).filter(function(key) {
+            var damage = that.template[key];
+            if (typeof damage.restorable != 'undefined') {
+              return damage.restorable;
+            } else {
+              var unlockDamaged = unlocked.some(function(duKey) {
+                var uDamage = that.template[duKey];
+                return (uDamage.count == 0 && typeof uDamage.unlockedBy != 'undefined' && uDamage.unlockedBy.some( function(ubKey) { return ubKey == key; }));
+              });
+              return !unlockDamaged;
+            }
+          });
+        },
+        addDamageEvent: function(damageEvent) {
+          if (damageEvents.length > damageEventIndex) {
+            damageEvents = damageEvents.slice(0, damageEventIndex);
+          }
+          damageEvents.push(damageEvent);
+          damageEventIndex++;
+        },
+        canUndo: function() { return damageEventIndex > 0; },
+        undo: function() {
+          if (!that.canUndo()) return;
+          var damageEvent = damageEvents[damageEventIndex - 1];
+          damageEvent.reverse().forEach(function(dCall) {
+            var fName = dCall[0];
+            var fArgs = dCall[1];
+            switch(fName) {
+            case "damage":
+              that.template[fArgs[0]].count += fArgs[1];
+              break;
+            case "restore":
+              that.template[fArgs[0]].count -= fArgs[1];
+              break;
+            }
+          });
+          damageEventIndex--;
+        },
+        canRedo: function() { return damageEventIndex < damageEvents.length; },
+        redo: function() {
+          if (!that.canRedo()) return;
+          var damageEvent = damageEvents[damageEventIndex];
+          damageEvent.forEach(function(dCall) {
+            var fName = dCall[0];
+            var fArgs = dCall[1];
+            switch(fName) {
+            case "damage":
+              that.template[fArgs[0]].count -= fArgs[1];
+              break;
+            case "restore":
+              that.template[fArgs[0]].count += fArgs[1];
+              break;
+            }
+          });
+          damageEventIndex++;
+        },
+        restore: function(key, amount) {
+          var damage = that.template[key];
+          var xAmount = Math.min(amount, damage.maxCount - damage.count);
+          if (xAmount > 0) {
+            that.addDamageEvent([["restore",[key,xAmount]]]);
+            damage.count += xAmount;
+          }
+          return true;
+        },
+        damage: function(amount, key) {
+          var damageEvent = [];
+          if (typeof key != 'undefined') {
+            var kDamage = that.template[key];
+            var kMin = Math.min(kDamage.count, amount);
+            if (kMin > 0) {
+              damageEvent.push(["damage",[key, kMin]]);
+              kDamage.count -= kMin;
+              if (kDamage.count == 0 && typeof kDamage.onLost != 'undefined') {
+                kDamage.onLost(damageEvent);
+              }
+              that.addDamageEvent(damageEvent);
+            }
+            return true;
+          }
+          if (that.countUnlocked().length == 0) return false;
+          if (amount == 0) return true;
+          var foundKey;
+          var findDamageKey = function() {
+            var options = that.countUnlocked();
+            return options[randX(options.length)];
+          }
+          foundKey = findDamageKey();
+          var damage = that.template[foundKey];
+          for(var ii = 0; ii < amount; ii++) {
+            if (typeof damage == 'undefined') {
+              that.addDamageEvent(damageEvent);
+              return false;
+            }
+            damageEvent.push(["damage",[foundKey,1]]);
+            damage.count--;
+            if (damage.count == 0 && typeof damage.onLost != 'undefined') {
+              damage.onLost(damageEvent);
+            }
+            if (damage.flow == null) {
+              foundKey = findDamageKey();
+              damage = that.template[foundKey];
+            } else if (damage.count == 0) {
+              foundKey = damage.flow;
+              damage = that.template[foundKey];
+              if (damage.count == 0) {
+                that.addDamageEvent(damageEvent);
+                return false;
+              }
+            }
+          }
+          that.addDamageEvent(damageEvent);
+          return true;
+        }
+      };
+      that.fullRestore();
+      return that;
+    }
+    var builders = {
+      "Human": function() {
+        var humanDamage;
+        var lostConsciousness = function(damageEvent) {
+          loseGuard(damageEvent);
+          loseBalance(damageEvent);
+          damageEvent.push(["damage",["Wind",humanDamage["Wind"].count]]);
+          humanDamage["Wind"].count = 0;
+          damageEvent.push(["damage",["Footing",humanDamage["Footing"].count]]);
+          humanDamage["Footing"].count = 0;
+        };
+        var loseGuard = function(damageEvent) { damageEvent.push(["damage",["Guard",humanDamage["Guard"].count]]); humanDamage["Guard"].count = 0; };
+        var loseBalance = function(damageEvent) { damageEvent.push(["damage",["Balance",humanDamage["Balance"].count]]); humanDamage["Balance"].count = 0 };
+        humanDamage = {
+          "Consciousness": {
+            maxCount: 1,
+            count: 1,
+            onLost: lostConsciousness,
+            unlockedBy: ["Core Strength"]
+          },
+          "Wind": {
+            maxCount: 1,
+            count: 1,
+            onLost: loseGuard,
+            flow: "Consciousness",
+            unlockedBy: ["Core Strength"]
+          },
+          "Morale": {
+            maxCount: 1,
+            count: 1,
+            flow: null,
+            unlockedBy: ["Core Strength", "Footing"]
+          },
+          "Footing": {
+            maxCount: 2,
+            count: 2,
+            flow: "Morale",
+            unlockedBy: ["Balance", "Leg Strength"]
+          },
+          "Strong Hand": {
+            maxCount: 1,
+            count: 1,
+            flow: "Core Strength",
+            unlockedBy: ["Guard"]
+          },
+          "Weak Hand": {
+            maxCount: 1,
+            count: 1,
+            flow: "Core Strength",
+            unlockedBy: ["Guard"]
+          },
+          "Core Strength": {
+            maxCount: 2,
+            count: 2,
+            unlockedBy: ["Guard"],
+            flow: null,
+            restorable: false
+          },
+          "Leg Strength": {
+            maxCount: 1,
+            count: 1,
+            onLost: loseBalance,
+            flow: "Core Strength",
+            unlockedBy: ["Guard"],
+            restorable: false
+          },
+          "Balance": {
+            maxCount: 3,
+            count: 3,
+            flow: null
+          },
+          "Guard": {
+            maxCount: 3,
+            count: 3,
+            flow: null,
+            restorable: true
+          }
+        }
+        return humanDamage;
+      }
+    }
+
+    function stateColor(state,template) {
+      var noProtection = function(st) {
+        return (
+          typeof st.unlockedBy == 'undefined' ||
+          st.unlockedBy.some(function(key){ var st2 = template[key]; return st2.count == 0 && noProtection(st2);})
+        );
+      };
+      if (state.count == 0) {
+        return '#f22';
+      } else if (state.count < state.maxCount) {
+        return '#ff2';
+      } else if (noProtection(state)) {
+        return '#2f2';
+      } else {
+        return '#888';
+      }
+    }
+    function graphDamage(damage, damageId) {
+      var template = damage.template;
+      var graph = "graph LR\n";
+      var index=0;
+      Object.entries(template).map( function(entry) {
+        index++;
+        var key = entry[0];
+        var state = entry[1];
+        var nKey = "n"+key.replace(/ /g,'_');
+        graph += ("  "+nKey+damageId+"["+key+(state.maxCount > 1 ? " x "+state.count : "")+"]\n  style "+nKey+damageId+" fill:"+stateColor(state,template)+",stroke:#000,stroke-width:2px\n");
+      });
+      Object.entries(template).map( function(entry) {
+        index++;
+        var key = entry[0];
+        var state = entry[1];
+        if (typeof state.unlockedBy != 'undefined') {
+          state.unlockedBy.forEach(function(ub) { graph += ("  n"+ub.replace(/ /g,'_')+damageId+"-->n"+key.replace(/ /g,'_')+damageId+"\n"); });
+        }
+      });
+      return graph;
+    }
+    damages = [];
+    function showDamage(builderName) {
+      var damageId = damages.length;
+      var readableId = damageId + 1;
+      var damage = damageModel(builders[builderName]);
+      damages.push(damage);
+      $('#damages').append("<div id='damage-"+damageId+"' style='background-color:#cccccc;padding:30px;width:550px;'>"+builderName+" "+readableId+
+        "<div id='mermaid-"+damageId+"' style='width:450;height:350'>graph LR\n  A-->B</div>"+
+        "<button id='add-damage-"+damageId+"'>Damage</button><select id='add-damage-amount-"+
+          damageId+"'><option>1</option><option>2</option><option>3</option><option>4</option></select>"+
+        "<button id='undo-"+damageId+"' style='position:relative;left:130px;'>Undo</button>"+
+        "<button id='redo-"+damageId+"' style='position:relative;left:160px;'>Redo</button>"+
+        "<button id='full-restore-"+damageId+"' style='position:relative;left:270px;'>Full Restore</button>"+
+      "</div>"
+      );
+      var damageToolLink;
+      function updateDamage() {
+        if (damage.canUndo()) { $("#undo-"+damageId).prop("disabled",false); } else { $("#undo-"+damageId).prop("disabled",true); }
+        if (damage.canRedo()) { $("#redo-"+damageId).prop("disabled",false); } else { $("#redo-"+damageId).prop("disabled",true); }
+        if (damage.canFullRestore()) { $("#full-restore-"+damageId).prop("disabled",false); } else { $("#full-restore-"+damageId).prop("disabled",true); }
+        $("#mermaid-"+damageId).text(graphDamage(damage, damageId)).removeAttr('data-processed');
+        mermaid.init(undefined, $("#mermaid-"+damageId));
+        Object.keys(damage.template).forEach(function(key) {
+          $("#n"+key.replace(/ /g,'_')+damageId).click(damageToolLink);
+        });
+      }
+      damageToolLink = function(event) {
+        event.stopPropagation();
+        var el = $(this);
+        //var elOffset = el[0].getBoundingClientRect();
+        var elOffset = el.offset();
+        var elRect = $("#"+el.attr('id')+" rect");
+        var dT = elOffset.top + elRect.height() - 50;
+        var dL = elOffset.left + elRect.width();
+        var match = el.attr('id').match(/^n(\D+)(\d+)$/);
+        var key = match[1].replace(/_/g,' ');
+        var damageId = parseInt(match[2]);
+        var damage = damages[damageId];
+        var state = damage.template[key];
+        $('#damage-tool').show();
+        $('#damage-tool-heal').off('click');
+        $('#damage-tool-damage').off('click');
+        $('#damage-tool').offset({top: dT, left: dL});
+        $('#damage-tool-heal').click(function(){ damage.restore(key, parseInt($('#damage-tool-amount').val())); updateDamage();});
+        $('#damage-tool-damage').click(function(){ damage.damage(parseInt($('#damage-tool-amount').val()), key); updateDamage();});
+      }
+      function damageToolUnlink() {
+        $('#damage-tool').hide();
+      }
+      $("#damage-"+damageId).click(damageToolUnlink);
+      updateDamage();
+      $("#full-restore-"+damageId).click(function(e){
+        damage.fullRestore();
+        updateDamage();
+      });
+      $("#add-damage-"+damageId).click(function(e){
+        var amount = $("#add-damage-amount-"+damageId).val();
+        damage.damage(amount);
+        updateDamage();
+      });
+      $("#undo-"+damageId).click(function(e){
+        damage.undo();
+        updateDamage();
+      });
+      $("#redo-"+damageId).click(function(e){
+        damage.redo();
+        updateDamage();
+      });
+    }
+
+    $('#add-player-add').click(function(e) {
+      var builderName = $('#add-player-type').val();
+      showDamage(builderName);
+    });
+  });
+</script>
+</body>
+</html>
